@@ -33,7 +33,13 @@ from qiskit.circuit.library import (
 )
 
 from qiskit.transpiler import PassManager, TransformationPass, CouplingMap, Target, TranspilerError
-from qiskit.transpiler.passes import SynthesizeRZRotations, CheckGateDirection, SabreLayout
+from qiskit.transpiler.optimization_metric import OptimizationMetric
+from qiskit.transpiler.passes import (
+    SynthesizeRZRotations,
+    CheckGateDirection,
+    HighLevelSynthesis,
+    SabreLayout,
+)
 from qiskit.transpiler.preset_passmanagers.plugin import PassManagerStagePluginManager
 from qiskit.transpiler.preset_passmanagers import (
     generate_preset_pass_manager,
@@ -395,10 +401,13 @@ class TestCliffordTPassManager(QiskitTestCase):
         expected_t_count = {1: 0, 2: 7, 3: 15, 4: 27, 5: 39, 6: 51, 7: 63}
         self.assertLessEqual(t_count, expected_t_count[n])
 
-    @data(2, 3, 4, 5, 6, 7)
-    def test_mcx_gate_many_dirty_ancillas(self, n):
+    @data(*((n, zero) for n in (2, 3, 4, 5, 6, 7) for zero in (True, False)))
+    @unpack
+    def test_mcx_gate_many_ancillas(self, n, qubits_initially_zero):
         """Clifford+T transpilation of a circuit with an mcx gate."""
-        # Create a circuit with an mcx gate and many dirty ancillas
+        # Create a circuit with an mcx gate and many spare qubits. With
+        # ``qubits_initially_zero`` high-level synthesis reports them as
+        # clean, without it, it reports them as dirty.
         nqc = 20  # number of qubits in the circuit
         qc = QuantumCircuit(nqc)
         for i in range(nqc):  # make all the qubits dirty
@@ -409,15 +418,53 @@ class TestCliffordTPassManager(QiskitTestCase):
 
         # Transpile to a Clifford+T basis set
         basis_gates = get_clifford_gate_names() + ["t", "tdg"]
-        pm = generate_preset_clifford_t_pass_manager(optimization_level=0)
+        pm = generate_preset_clifford_t_pass_manager(
+            optimization_level=0, qubits_initially_zero=qubits_initially_zero
+        )
         transpiled = pm.run(qc)
         self.assertLessEqual(set(transpiled.count_ops()), set(basis_gates))
 
         # The resulting decomposition should be efficient in terms of T-count
-        # provided 1 ancilla qubit is available
+        # provided enough ancillas qubit are available
         t_count = _get_t_count(transpiled)
-        expected_t_count = {1: 0, 2: 7, 3: 17, 4: 29, 5: 41, 6: 51, 7: 63}
+        expected_t_count = {
+            True: {2: 7, 3: 15, 4: 23, 5: 31, 6: 39, 7: 47},
+            False: {2: 7, 3: 22, 4: 30, 5: 38, 6: 46, 7: 54},
+        }[qubits_initially_zero]
         self.assertLessEqual(t_count, expected_t_count[n])
+
+    @data(
+        *(
+            (n, spare, zero)
+            for n in range(3, 8)
+            for spare in range(1, n + 2)
+            for zero in (True, False)
+        )
+    )
+    @unpack
+    def test_mcx_metric_t_count_never_worse_than_2q(
+        self, n, num_spare_qubits, qubits_initially_zero
+    ):
+        """Asking to optimize the T-count must not yield more T gates than
+        asking to optimize the two-qubit gate count."""
+
+        def t_count(metric):
+            gate = MCXGate(n)
+            qc = QuantumCircuit(gate.num_qubits + num_spare_qubits)
+            qc.append(gate, qc.qubits[: gate.num_qubits])
+            synthesized = PassManager(
+                [
+                    HighLevelSynthesis(
+                        optimization_metric=metric, qubits_initially_zero=qubits_initially_zero
+                    )
+                ]
+            ).run(qc)
+            pm = generate_preset_clifford_t_pass_manager(optimization_level=0)
+            return _get_t_count(pm.run(synthesized))
+
+        self.assertLessEqual(
+            t_count(OptimizationMetric.COUNT_T), t_count(OptimizationMetric.COUNT_2Q)
+        )
 
     @data(
         # Truncated result register: num_result_qubits < 2 * n.

@@ -1510,9 +1510,9 @@ class MCXSynthesisDefault(HighLevelSynthesisPlugin):
             return None
 
         metric = options.get("optimization_metric", OptimizationMetric.COUNT_2Q)
-        if metric == OptimizationMetric.COUNT_T:
-            # The order is optimized towards Clifford+T -friendly synthesis methods.
-            # In particular, we run 2DirtyKG24 and 1DirtyKG24 before NCleanM15 and NDirtyI15.
+        if metric == OptimizationMetric.COUNT_T and high_level_object.num_ctrl_qubits == 3:
+            # Only for 3 controls: there NDirtyI15 falls back to the definition of C3XGate,
+            # whose P(+-pi/8) rotations are not Clifford+T and dominate the T-count.
             methods = [
                 MCXSynthesis2CleanKG24,
                 MCXSynthesis1CleanKG24,
@@ -1521,15 +1521,11 @@ class MCXSynthesisDefault(HighLevelSynthesisPlugin):
                 MCXSynthesis1CleanB95,
                 MCXSynthesisNCleanM15,
                 MCXSynthesisNDirtyI15,
-                (
-                    MCXSynthesisNoAuxV24
-                    if high_level_object.num_ctrl_qubits <= 5
-                    else MCXSynthesisNoAuxHP24
-                ),
+                MCXSynthesisNoAuxV24,
             ]
         else:
-            # The order is optimized towards CX-count -friendly synthesis methods.
-            # In particular, we run NCleanM15 and NDirtyI15 before 2DirtyKG24 and 1DirtyKG24.
+            # This order serves both metrics: from 4 controls on, NCleanM15 and NDirtyI15
+            # produce fewer T gates as well as fewer CX gates than 2DirtyKG24 and 1DirtyKG24.
             methods = [
                 MCXSynthesis2CleanKG24,
                 MCXSynthesis1CleanKG24,

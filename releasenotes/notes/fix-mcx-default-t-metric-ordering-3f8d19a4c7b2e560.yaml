@@ -1,0 +1,8 @@
+---
+fixes:
+  - |
+    Fixed a bug in the default high-level synthesis plugin for :class:`.MCXGate`, where
+    requesting the ``COUNT_T`` :class:`.OptimizationMetric` with dirty auxiliary qubits and
+    4 or more control qubits returned a circuit that was worse than requesting ``COUNT_2Q`` on
+    both the T-count and the CX-count.
+    See `#14681 <https://github.com/Qiskit/qiskit/issues/14681>`__.
